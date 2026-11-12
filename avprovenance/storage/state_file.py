@@ -80,9 +80,8 @@ class JsonStateFile:
         with self._lock:
             return deepcopy(self._load_unlocked())
 
-    def _mutation_view(self) -> dict[str, Any]:
-        with self._lock:
-            source = self._load_unlocked()
+    def _mutation_view_unlocked(self) -> dict[str, Any]:
+        source = self._load_unlocked()
         draft: dict[str, Any] = {}
         for name, value in source.items():
             if name in {"assets", "renditions", "integrity_checks"}:
@@ -103,8 +102,12 @@ class JsonStateFile:
         return draft
 
     def mutate(self, mutation: Callable[[dict[str, Any]], T]) -> T:
-        state = self._mutation_view()
-        result = mutation(state)
+        # The load, the mutation, and the atomic replacement must happen
+        # under one lock hold. Splitting them lets two threads each build a
+        # draft from the same revision so the later write silently drops the
+        # earlier thread's committed records.
         with self._lock:
+            state = self._mutation_view_unlocked()
+            result = mutation(state)
             self._write_unlocked(state)
-        return result
+            return result

@@ -94,34 +94,27 @@ class ProvenanceRepository:
         output_asset: MediaAsset,
         edge: ProvenanceEdge,
     ) -> Rendition:
-        snapshot = self.state_file.read()
-        raw = snapshot["renditions"].get(rendition_id)
-        if not isinstance(raw, dict):
-            raise RenditionNotFound(rendition_id)
-        rendition = Rendition.from_dict(deep_copy(raw))
-        if output_asset.id in snapshot["assets"]:
-            raise InvalidStateTransition("asset", "duplicate")
-        if edge.rendition_id != rendition_id:
-            raise InvalidStateTransition("provenance", "wrong_rendition")
-        if edge.output_asset_id != output_asset.id:
-            raise InvalidStateTransition("provenance", "wrong_output")
-        rendition.output_asset_id = output_asset.id
-        rendition.error_code = None
-        rendition.error_message = None
-        rendition.transition_to("completed")
-        publication = {
-            "assets": deep_copy(snapshot["assets"]),
-            "renditions": deep_copy(snapshot["renditions"]),
-            "provenance_edges": deep_copy(snapshot["provenance_edges"]),
-        }
-        publication["assets"][output_asset.id] = output_asset.to_dict()
-        publication["renditions"][rendition_id] = rendition.to_dict()
-        publication["provenance_edges"].append(edge.to_dict())
-
         def mutate(state: dict[str, Any]) -> Rendition:
-            for name, records in publication.items():
-                state[name] = deep_copy(records)
-            return Rendition.from_dict(deep_copy(publication["renditions"][rendition_id]))
+            raw = state["renditions"].get(rendition_id)
+            if not isinstance(raw, dict):
+                raise RenditionNotFound(rendition_id)
+            rendition = Rendition.from_dict(deep_copy(raw))
+            if output_asset.id in state["assets"]:
+                raise InvalidStateTransition("asset", "duplicate")
+            if edge.rendition_id != rendition_id:
+                raise InvalidStateTransition("provenance", "wrong_rendition")
+            if edge.output_asset_id != output_asset.id:
+                raise InvalidStateTransition("provenance", "wrong_output")
+            rendition.output_asset_id = output_asset.id
+            rendition.error_code = None
+            rendition.error_message = None
+            rendition.transition_to("completed")
+            # Merge into the current state instead of republishing a
+            # snapshot: concurrent commits by other requests must survive.
+            state["assets"][output_asset.id] = output_asset.to_dict()
+            state["renditions"][rendition_id] = rendition.to_dict()
+            state["provenance_edges"].append(edge.to_dict())
+            return rendition
 
         return self.state_file.mutate(mutate)
 

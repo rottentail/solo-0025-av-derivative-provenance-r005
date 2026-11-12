@@ -67,7 +67,6 @@ class MediaProvenanceApplication:
 
     def ingest_asset(self, filename: Any, data: bytes) -> dict[str, Any]:
         safe_name = validate_filename(filename)
-        catalog = self.state_file.read()
         descriptor = inspect_media(data)
         digest = sha256_hex(data)
         content_key = self.content_files.key_for_digest(digest)
@@ -84,34 +83,28 @@ class MediaProvenanceApplication:
             created_at=utc_now(),
         )
         try:
-            persisted = self._commit_ingest_catalog(asset, catalog)
+            persisted = self._commit_ingest_catalog(asset)
         except Exception:
             if not existed:
                 self.content_files.remove(content_key)
             raise
         return persisted.to_public_dict()
 
-    def _commit_ingest_catalog(
-        self,
-        asset: MediaAsset,
-        catalog: dict[str, Any],
-    ) -> MediaAsset:
-        draft = deep_copy(catalog)
-        assets = draft.setdefault("assets", {})
-        if asset.id in assets:
-            raise ApplicationError(
-                code="ASSET_ALREADY_REGISTERED",
-                message="The asset identifier is already registered.",
-                status=409,
-            )
-        assets[asset.id] = asset.to_dict()
-        sections = ("assets", "renditions", "provenance_edges", "integrity_checks")
-        publication = {name: deep_copy(draft[name]) for name in sections}
-
+    def _commit_ingest_catalog(self, asset: MediaAsset) -> MediaAsset:
         def commit(current: dict[str, Any]) -> MediaAsset:
-            for name, value in publication.items():
-                current[name] = deep_copy(value)
-            return MediaAsset.from_dict(deep_copy(assets[asset.id]))
+            assets = current.setdefault("assets", {})
+            if asset.id in assets:
+                raise ApplicationError(
+                    code="ASSET_ALREADY_REGISTERED",
+                    message="The asset identifier is already registered.",
+                    status=409,
+                )
+            # Insert only the new record into the current state; replacing
+            # whole sections from a pre-inspection snapshot would erase
+            # renditions, edges, and audits committed concurrently.
+            record = asset.to_dict()
+            assets[asset.id] = record
+            return MediaAsset.from_dict(deep_copy(record))
 
         return self.state_file.mutate(commit)
 
